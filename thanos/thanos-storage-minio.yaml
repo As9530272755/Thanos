@@ -1,0 +1,9 @@
+type: s3
+config:
+  bucket: thanos
+  # 访问 minio 地址，由于这里都是在 K8S 里面使用所以采用了 dns 的方式访问它的 API
+  endpoint: minio.default.svc.cluster.local:9000
+  access_key: minio
+  secret_key: minio123
+  insecure: true
+  signature_version2: false

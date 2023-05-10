@@ -1,0 +1,80 @@
+# thanos-querier.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thanos-querier
+  namespace: kube-mon
+  labels:
+    app: thanos-querier
+spec:
+  # 无状态，可以多副本实现高可用
+  replicas: 2
+  selector:
+    matchLabels:
+      app: thanos-querier
+  template:
+    metadata:
+      labels:
+        app: thanos-querier
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - thanos-querier
+      containers:
+        - name: thanos
+          image: thanosio/thanos:v0.25.1
+          args:
+            - query
+            - --log.level=debug
+            # query.replica-label 该参数非常重要，查询标签也就是我们需要依据那个标签进行去重，因为在上面创建 config 的时候添加了 replica 的唯一标识标签，所以就基于上面的标签进行去重
+            - --query.replica-label=replica
+            # Discover local store APIs using DNS SRV. 配置实现 store API 的地址，基于 dns+svc 的方式，而改地址就是上面创建的 Prometheus-headless 的 name 字段 thanos-store-gateway
+            - --store=dnssrv+thanos-store-gateway:10901
+          ports:
+            - name: http
+              containerPort: 10902
+            - name: grpc
+              containerPort: 10901
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 500m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+---
+# 通过 nodeport 暴露 query
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-querier
+  namespace: kube-mon
+  labels:
+    app: thanos-querier
+spec:
+  ports:
+    - port: 9090
+      targetPort: http
+      name: http
+  selector:
+    app: thanos-querier
+  type: NodePort

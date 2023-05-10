@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-store-gateway
+  namespace: kube-mon
+  labels:
+    app: thanos-store-gateway
+spec:
+  # 副本数配置为 2 用于高可用
+  replicas: 2
+  selector:
+    matchLabels:
+      app: thanos-store-gateway
+  # 匹配 headless Service
+  serviceName: thanos-store-gateway
+  template:
+    metadata:
+      labels:
+        app: thanos-store-gateway
+        # thanos-store-api: "true" 该标签就是想告诉系统当前的这个组件也实现了 store-api，然后 query 组件就能直接对接有该标签的组件，所以后续 query 就能够实现直接查询拥有该标签的数据比如 sidecar 和 store 组件
+        thanos-store-api: "true"
+    spec:
+      affinity:
+        # 由于是采用了高可用，所以这里我使用了 pod 的反亲和性将两个 pod 部署在不同的 node 上
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - thanos-store-gateway
+      containers:
+        - name: thanos
+          image: thanosio/thanos:v0.25.1
+          args:
+            - "store"
+            - "--log.level=debug"
+            - "--data-dir=/data"
+        # objstore.config-file 指定对象存储的配置文件，将刚才 minio 的对接访问通过 secrets 引用进来
+            - "--objstore.config-file=/etc/secret/thanos.yaml"
+            - "--index-cache-size=500MB"
+            - "--chunk-pool-size=500MB"
+          ports:
+            - name: http
+              containerPort: 10902
+            - name: grpc
+              containerPort: 10901
+          livenessProbe:
+            httpGet:
+              port: 10902
+              path: /-/healthy
+          readinessProbe:
+            httpGet:
+              port: 10902
+              path: /-/ready
+          volumeMounts:
+      # 将 thanos-objectstorage secrete 挂载到 /etc/secret 用于上面 objstore.config-file 指定
+            - name: object-storage-config
+              mountPath: /etc/secret
+              readOnly: false
+            - mountPath: /data
+              name: data
+      volumes:
+        # 将 thanos-objectstorage secrete 挂载进容器中
+        - name: object-storage-config
+          secret:
+            secretName: thanos-objectstorage
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: longhorn
+        resources:
+          requests:
+            storage: 1Gi
